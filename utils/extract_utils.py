@@ -180,3 +180,75 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
 
     output_file = os.path.join(args.output_dir, im_file.split('.')[0])
     np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1), info=info) 
+
+def save_scores_and_roi_features(args, cfg, im_file, im, dataset_dict, boxes, scores, features_pooled, attr_scores=None):
+    MIN_BOXES = cfg.MODEL.BUA.EXTRACTOR.MIN_BOXES
+    MAX_BOXES = cfg.MODEL.BUA.EXTRACTOR.MAX_BOXES
+    CONF_THRESH = cfg.MODEL.BUA.EXTRACTOR.CONF_THRESH
+  
+    dets = boxes[0] / dataset_dict['im_scale']
+    scores = scores[0]
+    feats = features_pooled[0]
+
+    max_conf = torch.zeros((scores.shape[0])).to(scores.device)
+    for cls_ind in range(1, scores.shape[1]):
+            cls_scores = scores[:, cls_ind]
+            keep = nms(dets, cls_scores, 0.3)
+            max_conf[keep] = torch.where(cls_scores[keep] > max_conf[keep],
+                                             cls_scores[keep],
+                                             max_conf[keep])
+
+    keep_boxes = torch.nonzero(max_conf >= CONF_THRESH).flatten()
+    if len(keep_boxes) < MIN_BOXES:
+        keep_boxes = torch.argsort(max_conf, descending=True)[:MIN_BOXES]
+    elif len(keep_boxes) > MAX_BOXES:
+        keep_boxes = torch.argsort(max_conf, descending=True)[:MAX_BOXES]
+
+
+    image_feat = feats[keep_boxes]
+    image_bboxes = dets[keep_boxes]
+    image_objects_conf = np.max(scores[keep_boxes].numpy()[:,1:], axis=1)
+    image_objects = np.argmax(scores[keep_boxes].numpy()[:,1:], axis=1)
+    image_scores = scores[keep_boxes]
+
+    output_file = os.path.join(args.output_dir, im_file.split('.')[0])
+
+    if not attr_scores is None:
+        attr_scores = attr_scores[0]
+        image_attr_scores = attr_scores[keep_boxes]
+        image_attrs_conf = np.max(attr_scores[keep_boxes].numpy()[:,1:], axis=1)
+        image_attrs = np.argmax(attr_scores[keep_boxes].numpy()[:,1:], axis=1)
+        info = {
+            'image_id': im_file.split('.')[0],
+            'image_h': np.size(im, 0),
+            'image_w': np.size(im, 1),
+            'num_boxes': len(keep_boxes),
+            'objects_id': image_objects,
+            'objects_conf': image_objects_conf,
+            'attrs_id': image_attrs,
+            'attrs_conf': image_attrs_conf,
+            }
+        np.savez_compressed(
+            output_file, info=info,
+            x=image_feat, bbox=image_bboxes,
+            objects_id=image_objects, objects_conf=image_objects_conf,
+            objects_score=image_scores[:,1:],
+            attrs_id=image_attrs, attrs_conf=image_attrs_conf,
+            attrs_score=image_attr_scores[:,1:],
+            num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1))
+    else:
+        info = {
+            'image_id': im_file.split('.')[0],
+            'image_h': np.size(im, 0),
+            'image_w': np.size(im, 1),
+            'num_boxes': len(keep_boxes),
+            'objects_id': image_objects,
+            'objects_conf': image_objects_conf
+            }
+        np.savez_compressed(
+            output_file, info=info,
+            x=image_feat, bbox=image_bboxes,
+            objects_id=image_objects, objects_conf=image_objects_conf,
+            objects_score=image_scores[:,1:],
+            num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1))
+    
